@@ -4,46 +4,80 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"os"
 	"strings"
+	"sync"
+	"time"
 )
 
-// /
-func handler(response http.ResponseWriter, request *http.Request) {
-	// Log the request
-	log.Printf("Received %s request for %s from %s", request.Method, request.URL, request.Host)
+// Current request count
+type Counter struct {
+	count     int
+	mutex     sync.Mutex
+	startTime time.Time
+}
 
-	// Create response string builder and add some metadata
-	var responseHeaderListBuilder strings.Builder
-	responseHeaderListBuilder.WriteString(fmt.Sprintf("Your IP: %s\n%s %s\n\n", request.Host, request.Method, request.URL))
+// Increment counter
+func (c *Counter) increment() {
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+	c.count++
+}
 
+// Get current count
+func (c *Counter) getCount() int {
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+	return c.count
+}
+
+// Create response
+func responseBuilder(request *http.Request, currentCount int, startTime time.Time) string {
+
+	// Create empty response body
+	var responseBodyBuilder strings.Builder
+
+	responseBodyBuilder.WriteString(fmt.Sprintf("Your Host: %s\n", request.Host))
+	responseBodyBuilder.WriteString(fmt.Sprintf("Uptime: %s - Current Requests: %d\n", formatDuration(time.Since(startTime)), currentCount))
+	responseBodyBuilder.WriteString(fmt.Sprintf("%s %s %s\n\n", request.Method, request.Proto, request.URL))
+
+	// Now we build the response body header list
 	// Iterate over each key-value pair (eg "Content-Type", "Accept")
 	for reqHeaderName, reqHeaders := range request.Header {
-
 		// Iterate over each value in reqHeaders[] and write to builder
 		for _, reqHeaderValue := range reqHeaders {
-			// "HeaderName: HeaderValue\n"
-			responseHeaderListBuilder.WriteString(fmt.Sprintf("%v: %v\n", reqHeaderName, reqHeaderValue))
+			responseBodyBuilder.WriteString(fmt.Sprintf("%v: %v\n", reqHeaderName, reqHeaderValue)) // "HeaderName: HeaderValue\n"
 		}
 	}
 
-	// Convert builder to string and write to response
-	var responseHeaderList string = responseHeaderListBuilder.String()
-	fmt.Fprint(response, responseHeaderList)
+	// Convert the string builder to a string and return it
+	var responseBody string = responseBodyBuilder.String()
+	return responseBody
 }
 
 // Main
 func main() {
-	// The goal is to spin up a simple server for testing web apps
-	var port string = os.Getenv("PORT")
-	if port == "" {
-		port = "8080"
+	// Create counter
+	var counter *Counter = &Counter{
+		startTime: time.Now(),
 	}
 
-	// Log
-	log.Printf("Serving website on port %s\n", port)
+	log.Println("Server Online! StartTime: ", counter.startTime)
 
-	// Serve Website
-	http.HandleFunc("/", handler)
-	log.Fatal(http.ListenAndServe(":"+port, nil))
+	// Handle /
+	http.HandleFunc("/", func(response http.ResponseWriter, request *http.Request) {
+		counter.increment()
+		fmt.Fprint(response, responseBuilder(request, counter.getCount(), counter.startTime))
+	})
+
+	// Bind to port
+	log.Fatal(http.ListenAndServe(":8080", nil))
+}
+
+func formatDuration(d time.Duration) string {
+	days := int(d.Hours() / 24)
+	hours := int(d.Hours()) % 24
+	minutes := int(d.Minutes()) % 60
+	seconds := int(d.Seconds()) % 60
+
+	return fmt.Sprintf("%02d:%02d:%02d:%02d", days, hours, minutes, seconds)
 }
